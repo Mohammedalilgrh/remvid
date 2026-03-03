@@ -3,11 +3,9 @@ import { motion, AnimatePresence } from "motion/react";
 import {
   Sparkles,
   Download,
-  Layers,
   Loader2,
   AlertCircle,
   CheckCircle2,
-  RefreshCw,
   Zap,
   Trash2,
 } from "lucide-react";
@@ -69,7 +67,6 @@ export default function App() {
     await Promise.all(
       initialProjects.map(async (proj) => {
         try {
-          // Run TTS + clip fetching in parallel
           const [audioUrl, rawClips] = await Promise.all([
             generateTTS(proj.script),
             Promise.all(
@@ -77,7 +74,6 @@ export default function App() {
             ),
           ]);
 
-          // Get actual audio duration for scene timing normalization
           const actualDuration = await getAudioDuration(audioUrl);
           const totalScriptDuration = proj.script.scenes.reduce(
             (acc, s) => acc + (s.duration || 1.2),
@@ -124,7 +120,6 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#0A0A0A] text-white font-sans selection:bg-cyan-400 selection:text-black">
-      {/* Header */}
       <header className="border-b border-white/10 px-6 py-4 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <div className="w-7 h-7 bg-cyan-400 rounded-sm flex items-center justify-center">
@@ -141,7 +136,6 @@ export default function App() {
       </header>
 
       <main className="max-w-6xl mx-auto p-6 grid grid-cols-1 lg:grid-cols-12 gap-8">
-        {/* Left: Controls */}
         <aside className="lg:col-span-4 space-y-5">
           <div className="bg-white/[0.03] border border-white/10 rounded-2xl p-5 space-y-5">
             <h2 className="text-[11px] font-bold uppercase tracking-widest text-white/40">
@@ -218,7 +212,6 @@ export default function App() {
             </div>
           )}
 
-          {/* Script previews */}
           {scripts.length > 0 && (
             <div className="space-y-3">
               <h3 className="text-[11px] uppercase tracking-widest text-white/30 font-bold">
@@ -251,7 +244,6 @@ export default function App() {
           )}
         </aside>
 
-        {/* Right: Video output */}
         <section className="lg:col-span-8 space-y-6">
           <AnimatePresence mode="wait">
             {projects.length > 0 ? (
@@ -290,9 +282,7 @@ export default function App() {
                   <Sparkles className="w-8 h-8 text-white/20" />
                 </div>
                 <div>
-                  <h3 className="text-lg font-bold mb-2">
-                    Ready to generate
-                  </h3>
+                  <h3 className="text-lg font-bold mb-2">Ready to generate</h3>
                   <p className="text-white/30 text-sm max-w-xs">
                     Enter a niche and click Generate. Your viral short-form videos will appear here.
                   </p>
@@ -327,16 +317,27 @@ function VideoCard({ project }: { project: VideoProject }) {
       canvas.height = 1280;
       const ctx = canvas.getContext("2d")!;
 
+      const canvasAny = canvas as any;
+      if (!canvasAny.captureStream) {
+        const a = document.createElement("a");
+        a.href = project.audioUrl;
+        a.download = `viral-${project.id}-audio.wav`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        alert("Video export is not supported in this browser. Audio downloaded instead. Please use Chrome.");
+        return;
+      }
+
       const audio = new Audio(project.audioUrl);
       audio.crossOrigin = "anonymous";
 
-      const stream = canvas.captureStream(30);
+      const stream: MediaStream = canvasAny.captureStream(30);
       let audioTracks: MediaStreamTrack[] = [];
 
       try {
-        const aStream =
-          (audio as any).captureStream?.() ||
-          (audio as any).mozCaptureStream?.();
+        const audioAny = audio as any;
+        const aStream = audioAny.captureStream?.() || audioAny.mozCaptureStream?.();
         if (aStream) audioTracks = aStream.getAudioTracks();
       } catch (_) {}
 
@@ -348,32 +349,48 @@ function VideoCard({ project }: { project: VideoProject }) {
       const mime = MediaRecorder.isTypeSupported("video/webm;codecs=vp9")
         ? "video/webm;codecs=vp9"
         : "video/webm";
+
       const recorder = new MediaRecorder(combined, { mimeType: mime });
       const chunks: Blob[] = [];
-      recorder.ondataavailable = (e) => chunks.push(e.data);
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) chunks.push(e.data);
+      };
 
-      await new Promise<void>((resolve) => {
+      await new Promise<void>((resolve, reject) => {
         recorder.onstop = () => {
-          const blob = new Blob(chunks, { type: mime });
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement("a");
-          a.href = url;
-          a.download = `viral-${project.id}.webm`;
-          a.click();
-          URL.revokeObjectURL(url);
-          resolve();
+          try {
+            const blob = new Blob(chunks, { type: mime });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = `viral-${project.id}.webm`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+            resolve();
+          } catch (err) {
+            reject(err);
+          }
         };
 
-        recorder.start();
+        recorder.onerror = (e) => reject(e);
+        recorder.start(100);
         audio.play().catch(console.error);
 
         let sceneIdx = 0;
         let sceneStart = Date.now();
+        let isRunning = true;
 
-        const renderLoop = async () => {
+        const renderLoop = () => {
+          if (!isRunning) return;
+
           if (sceneIdx >= project.script.scenes.length) {
-            recorder.stop();
-            audio.pause();
+            isRunning = false;
+            setTimeout(() => {
+              recorder.stop();
+              audio.pause();
+            }, 300);
             return;
           }
 
@@ -389,31 +406,37 @@ function VideoCard({ project }: { project: VideoProject }) {
           }
 
           const clip = project.clips[sceneIdx % project.clips.length];
+
+          ctx.fillStyle = "#000";
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+
           const vidEl = document.createElement("video");
           vidEl.src = clip;
           vidEl.muted = true;
           vidEl.crossOrigin = "anonymous";
+          vidEl.style.display = "none";
           document.body.appendChild(vidEl);
 
-          try {
-            await vidEl.play();
-          } catch (_) {}
+          const LB = 0.1;
+          const barH = canvas.height * LB;
+          const vidAreaH = canvas.height * (1 - 2 * LB);
 
-          const drawFrame = () => {
-            const e = Date.now() - sceneStart;
-            if (e >= sceneDuration) {
+          const drawCurrentFrame = () => {
+            if (!isRunning) {
               vidEl.pause();
-              document.body.removeChild(vidEl);
+              if (document.body.contains(vidEl)) document.body.removeChild(vidEl);
+              return;
+            }
+
+            const e2 = Date.now() - sceneStart;
+            if (e2 >= sceneDuration) {
+              vidEl.pause();
+              if (document.body.contains(vidEl)) document.body.removeChild(vidEl);
               sceneIdx++;
               sceneStart = Date.now();
               requestAnimationFrame(renderLoop);
               return;
             }
-
-            // Letterbox + video
-            const LB = 0.1;
-            const barH = canvas.height * LB;
-            const vidAreaH = canvas.height * (1 - 2 * LB);
 
             ctx.fillStyle = "#000";
             ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -438,53 +461,33 @@ function VideoCard({ project }: { project: VideoProject }) {
               ctx.filter = "none";
             }
 
-            // Letterbox bars
             ctx.fillStyle = "#000";
             ctx.fillRect(0, 0, canvas.width, barH);
             ctx.fillRect(0, canvas.height - barH, canvas.width, barH);
 
-            // Gradient overlay
-            const grad = ctx.createLinearGradient(
-              0,
-              canvas.height - barH,
-              0,
-              canvas.height - barH - vidAreaH * 0.35
-            );
+            const grad = ctx.createLinearGradient(0, canvas.height - barH, 0, canvas.height - barH - vidAreaH * 0.35);
             grad.addColorStop(0, "rgba(0,0,0,0.55)");
             grad.addColorStop(1, "rgba(0,0,0,0)");
             ctx.fillStyle = grad;
             ctx.fillRect(0, canvas.height - barH - vidAreaH * 0.35, canvas.width, vidAreaH * 0.35);
 
-            // Caption
             const words = scene.text.trim().split(/\s+/);
-            const emphasisClean =
-              scene.emphasis?.toLowerCase().replace(/[.,!?;:'"]/g, "") || "";
-
+            const emphasisClean = scene.emphasis?.toLowerCase().replace(/[.,!?;:'"]/g, "") || "";
             ctx.textBaseline = "bottom";
             ctx.shadowColor = "rgba(0,0,0,0.95)";
             ctx.shadowBlur = 12;
             ctx.shadowOffsetY = 2;
 
-            const captionBottom =
-              canvas.height - barH - vidAreaH * 0.26;
+            const captionBottom = canvas.height - barH - vidAreaH * 0.26;
             const x = 40;
             let lineY = captionBottom;
 
-            // Measure and wrap words — emphasis words are 90px, normal are 36px
             const lines: { word: string; isEmphasis: boolean }[][] = [[]];
             words.forEach((word) => {
-              const isEmp =
-                word.toLowerCase().replace(/[.,!?;:'"]/g, "") ===
-                emphasisClean;
-              const fontSize = isEmp ? 90 : 36;
-              ctx.font = `900 ${fontSize}px Inter, Arial Black, sans-serif`;
+              const isEmp = word.toLowerCase().replace(/[.,!?;:'"]/g, "") === emphasisClean;
               const lastLine = lines[lines.length - 1];
-              const lineText = lastLine
-                .map((w) => w.word)
-                .join(" ")
-                .concat(lastLine.length ? " " + word : word);
-              // Use max font to measure line width approximately
               ctx.font = `900 90px Inter, Arial Black, sans-serif`;
+              const lineText = lastLine.map((w) => w.word).join(" ") + (lastLine.length ? " " + word : word);
               const w = ctx.measureText(lineText).width;
               if (w > canvas.width - 80 && lastLine.length > 0) {
                 lines.push([{ word, isEmphasis: isEmp }]);
@@ -493,7 +496,6 @@ function VideoCard({ project }: { project: VideoProject }) {
               }
             });
 
-            // Draw lines bottom-up
             lines.reverse().forEach((line) => {
               let curX = x;
               let lineHeight = 0;
@@ -512,14 +514,30 @@ function VideoCard({ project }: { project: VideoProject }) {
             ctx.shadowBlur = 0;
             ctx.shadowOffsetY = 0;
 
-            requestAnimationFrame(drawFrame);
+            requestAnimationFrame(drawCurrentFrame);
           };
 
-          requestAnimationFrame(drawFrame);
+          vidEl.oncanplay = () => {
+            vidEl.play().catch(console.error);
+            requestAnimationFrame(drawCurrentFrame);
+          };
+
+          vidEl.onerror = () => {
+            if (document.body.contains(vidEl)) document.body.removeChild(vidEl);
+            sceneIdx++;
+            sceneStart = Date.now();
+            requestAnimationFrame(renderLoop);
+          };
+
+          vidEl.load();
         };
 
         requestAnimationFrame(renderLoop);
       });
+
+    } catch (err: any) {
+      console.error("Export error:", err);
+      alert("Export failed: " + (err?.message || "Unknown error"));
     } finally {
       setIsExporting(false);
     }
@@ -593,7 +611,6 @@ function VideoCard({ project }: { project: VideoProject }) {
   );
 }
 
-// Helper to get audio duration
 function getAudioDuration(url: string): Promise<number> {
   return new Promise((resolve, reject) => {
     const audio = new Audio(url);
