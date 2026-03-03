@@ -13,8 +13,15 @@ export default defineConfig({
   build: {
     chunkSizeWarningLimit: 2000,
   },
+  server: {
+    host: "0.0.0.0",
+  },
   preview: {
     host: "0.0.0.0",
-    allowedHosts: "all",
+    port: 4173,
+    allowedHosts: [
+      "remvid.onrender.com",
+      "all"
+    ],
   },
 });
