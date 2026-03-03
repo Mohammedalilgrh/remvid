@@ -1,22 +1,19 @@
-import { GoogleGenAI, Modality, Type, ThinkingLevel } from "@google/genai";
+import { GoogleGenAI, Modality, Type } from "@google/genai";
 
 const getAI = () =>
   new GoogleGenAI({
-    apiKey:
-      (import.meta as any).env?.VITE_GEMINI_API_KEY ||
-      (typeof process !== "undefined" && process.env?.GEMINI_API_KEY) ||
-      "",
+    apiKey: (import.meta as any).env?.VITE_GEMINI_API_KEY || "",
   });
 
 export interface Scene {
-  text: string;        // 2-5 words shown as caption
-  emphasis: string;    // ONE word to highlight in cyan uppercase
-  keywords: string;    // Pexels search keywords
-  duration: number;    // seconds (0.8 - 1.5)
+  text: string;
+  emphasis: string;
+  keywords: string;
+  duration: number;
 }
 
 export interface Script {
-  text: string;        // full spoken script (single narrator)
+  text: string;
   scenes: Scene[];
 }
 
@@ -52,7 +49,6 @@ Generate ${count} complete video scripts now.
 
 Return ONLY valid JSON array, no markdown.`,
       config: {
-        thinkingConfig: { thinkingBudget: 0 },
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.ARRAY,
@@ -78,7 +74,7 @@ Return ONLY valid JSON array, no markdown.`,
                     },
                     keywords: {
                       type: Type.STRING,
-                      description: "Specific Pexels video search query, e.g. 'skiing fresh powder mountain' or 'luxury private jet interior'"
+                      description: "Specific Pexels video search query"
                     },
                     duration: {
                       type: Type.NUMBER,
@@ -103,21 +99,17 @@ Return ONLY valid JSON array, no markdown.`,
   }
 }
 
-// Single-speaker TTS matching the reference video's confident narrator voice
 export async function generateTTS(script: Script): Promise<string> {
   const ai = getAI();
-
-  const spokenText = script.text;
 
   try {
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash-preview-tts",
-      contents: [{ parts: [{ text: spokenText }] }],
+      contents: [{ parts: [{ text: script.text }] }],
       config: {
         responseModalities: [Modality.AUDIO],
         speechConfig: {
           voiceConfig: {
-            // Kore: deep, confident, authoritative male voice - matches reference
             prebuiltVoiceConfig: { voiceName: "Kore" }
           }
         }
@@ -148,13 +140,13 @@ function buildWavDataUrl(base64Pcm: string, sampleRate: number): string {
   view.setUint32(4, 36 + len, true);
   writeStr(8, "WAVE");
   writeStr(12, "fmt ");
-  view.setUint32(16, 16, true);      // chunk size
-  view.setUint16(20, 1, true);       // PCM
-  view.setUint16(22, 1, true);       // mono
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
   view.setUint32(24, sampleRate, true);
   view.setUint32(28, sampleRate * 2, true);
-  view.setUint16(32, 2, true);       // block align
-  view.setUint16(34, 16, true);      // bits per sample
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
   writeStr(36, "data");
   view.setUint32(40, len, true);
 
